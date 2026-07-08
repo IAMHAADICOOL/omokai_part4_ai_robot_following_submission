@@ -1,0 +1,32 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Single source of truth for WHERE the robot starts.
+#
+# Two poses, in TWO different frames -- this distinction is the whole point:
+#
+#   world_spawn : where Gazebo places the robot (the SIMULATOR's world frame).
+#   map_seed    : that same spot expressed in the saved MAP's frame -- this is
+#                 what AMCL is told at startup so it localizes correctly with no
+#                 manual "2D Pose Estimate".
+#
+# WHY map_seed is (0,0,0) and basically never changes:
+#   SLAM anchors the map's origin at wherever the robot STARTED mapping. So if
+#   you always spawn at world_spawn and you built the map starting from
+#   world_spawn, then world_spawn IS the map origin -> map_seed = (0,0,0), every
+#   time, no matter how often you re-map. You only ever touch world_spawn.
+#
+# The ONE exception: if you load a map whose origin is NOT your spawn (e.g. a
+# pre-made map, or you spawn somewhere in the middle of an existing map), then
+# localize once correctly in RViz, run:
+#     ros2 topic echo /amcl_pose --once
+# and paste those x / y / yaw into map_seed below.
+# ─────────────────────────────────────────────────────────────────────────────
+
+world_spawn:          # SIMULATOR (Gazebo world frame)
+  x: -2.0
+  y: -0.5
+  yaw: 0.0
+
+map_seed:             # AMCL (saved map frame). Normally (0,0,0) -- see above.
+  x: 0.0
+  y: 0.0
+  yaw: 0.0

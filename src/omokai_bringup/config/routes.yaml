@@ -1,0 +1,21 @@
+# Named routes, in the `map` frame.
+#
+# perimeter : single-robot patrol loop (Phase 1, turtlebot3_world).
+# sweep     : squad CENTER path for formation_sweep (Phase 2). The formation
+#             coordinator offsets each robot around these points per formation.
+#
+# Phase 2 targets tb3_multi_robot in turtlebot3_world (hexagonal arena ~ +/-2.4m,
+# 3x3 cylinder pillars near the centre). `sweep` runs along the lower-open lane,
+# left -> right -> up, staying clear of the pillars. TUNE in RViz if a waypoint
+# lands on an obstacle (hover to read coords / drop nav goals).
+routes:
+  perimeter:
+    - {x: -1.8, y: -1.8, yaw: 0.0}
+    - {x:  1.8, y: -1.8, yaw: 1.57}
+    - {x:  1.8, y:  1.8, yaw: 3.14}
+    - {x: -1.8, y:  1.8, yaw: -1.57}
+  sweep:
+    - {x: -1.6, y: -1.6}
+    - {x:  0.0, y: -1.6}
+    - {x:  1.6, y: -1.6}
+    - {x:  1.6, y:  0.0}

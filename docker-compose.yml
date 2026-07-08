@@ -1,0 +1,37 @@
+# Starts BOTH containers but does NOT launch the robot software automatically.
+# The ros container stays alive; you open terminals into it and run the Part 1
+# or Part 2 launch commands yourself (see README section "Launching").
+#   docker compose up -d --build      # build + start in the background
+#   docker compose exec ros bash      # open a terminal inside (repeat for more)
+services:
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ros:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - LIBGL_ALWAYS_SOFTWARE=1
+      - TURTLEBOT3_MODEL=burger
+      - LLM_MODEL=qwen2.5:3b
+      - OLLAMA_HOST=http://ollama:11434
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./src:/ws/src
+    stdin_open: true
+    tty: true
+
+volumes:
+  ollama_models:
