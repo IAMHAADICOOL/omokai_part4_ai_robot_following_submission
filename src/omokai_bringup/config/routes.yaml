@@ -10,10 +10,10 @@
 # lands on an obstacle (hover to read coords / drop nav goals).
 routes:
   perimeter:
-    - {x: -1.8, y: -1.8, yaw: 0.0}
-    - {x:  1.8, y: -1.8, yaw: 1.57}
-    - {x:  1.8, y:  1.8, yaw: 3.14}
-    - {x: -1.8, y:  1.8, yaw: -1.57}
+    - {x: 1.08, y: -1.54, yaw: 0.0}
+    - {x: 3.10, y: -1.30, yaw: 1.57}
+    - {x: 3.24, y:  2.22, yaw: 3.14}
+    - {x: 0.79, y:  2.15, yaw: -1.57}
   sweep:
     - {x: -1.6, y: -1.6}
     - {x:  0.0, y: -1.6}

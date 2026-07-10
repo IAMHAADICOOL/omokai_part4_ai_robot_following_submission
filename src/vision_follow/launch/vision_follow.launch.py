@@ -12,18 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Brings up vision_follow_node in the namespace of an already-spawned
-# burger_cam robot (from tb3_multi_robot's tb3_world.launch.py). Run
-# tb3_world.launch.py first.
+# Part 4: vision detect + follow, attached to an already-spawned burger_cam.
 #
-# Two usage modes:
-#   YOLO (follow a named COCO object):
-#     ros2 launch vision_follow vision_follow.launch.py \
-#         robot_name:=tb1 detection_mode:=yolo target_class:=person
+#   nav2 mode (default) -- obstacle-aware. Run tb3_world + follow_nav2 first:
+#     ros2 launch vision_follow vision_follow.launch.py robot_name:=tb1
 #
-#   ArUco (follow another robot wearing a printed marker):
+#   follow more closely (see README for the Nav2 params that must move too):
+#     ros2 launch vision_follow vision_follow.launch.py robot_name:=tb1 \
+#         standoff_distance:=0.45 stop_distance:=0.5 resume_distance:=0.7
+#
+#   direct mode -- reactive, no map, no obstacle avoidance. tb3_world only:
 #     ros2 launch vision_follow vision_follow.launch.py \
-#         robot_name:=tb1 detection_mode:=aruco aruco_marker_id:=0
+#         robot_name:=tb1 control_mode:=direct
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -32,76 +32,82 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    robot_name_arg = DeclareLaunchArgument(
-        'robot_name', default_value='tb1',
-        description='Namespace of the already-spawned robot to attach vision/follow to (e.g. tb1).')
-    detection_mode_arg = DeclareLaunchArgument(
-        'detection_mode', default_value='yolo',
-        description="'yolo' (pretrained COCO classes) or 'aruco' (fiducial marker on the target robot).")
-    target_class_arg = DeclareLaunchArgument(
-        'target_class', default_value='person',
-        description=(
-            "[yolo mode] Initial COCO class to detect/follow. Can be "
-            "changed at runtime by publishing std_msgs/String to "
-            "'<robot_name>/vision/set_target_class'."))
-    aruco_dictionary_arg = DeclareLaunchArgument(
-        'aruco_dictionary', default_value='DICT_4X4_50',
-        description="[aruco mode] cv2.aruco predefined dictionary name.")
-    aruco_marker_id_arg = DeclareLaunchArgument(
-        'aruco_marker_id', default_value='0',
-        description=(
-            "[aruco mode] Marker id to follow. Can be changed at runtime "
-            "by publishing the id (as a string) to "
-            "'<robot_name>/vision/set_target_class'."))
-    model_path_arg = DeclareLaunchArgument(
-        'model_path', default_value='yolov8n.pt',
-        description='[yolo mode] Path or name of the Ultralytics YOLO weights file.')
-    confidence_arg = DeclareLaunchArgument('confidence_threshold', default_value='0.5')
-    device_arg = DeclareLaunchArgument(
-        'device', default_value='cpu',
-        description=(
-            "[yolo mode] Inference device, e.g. 'cpu' or 'cuda:0'. Defaults "
-            "to 'cpu' for portability. Confirm torch.cuda.is_available() "
-            "is True before passing device:=cuda:0."))
-    use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='true')
+    args = [
+        DeclareLaunchArgument('robot_name', default_value='tb1',
+                              description='Namespace of the FOLLOWER robot.'),
+        DeclareLaunchArgument('control_mode', default_value='nav2',
+                              description="'nav2' (plans around obstacles) or 'direct'."),
+        DeclareLaunchArgument('detection_mode', default_value='aruco',
+                              description="'aruco' or 'yolo'."),
+        DeclareLaunchArgument('aruco_marker_id', default_value='0'),
+        DeclareLaunchArgument('aruco_dictionary', default_value='DICT_4X4_50'),
+        DeclareLaunchArgument('marker_length', default_value='0.08',
+                              description='Real marker side in metres; scales PnP distance.'),
+        DeclareLaunchArgument('target_class', default_value='person'),
+        DeclareLaunchArgument('model_path', default_value='yolov8n.pt'),
+        DeclareLaunchArgument('confidence_threshold', default_value='0.5'),
+        DeclareLaunchArgument('device', default_value='cpu'),
 
-    robot_name = LaunchConfiguration('robot_name')
-    detection_mode = LaunchConfiguration('detection_mode')
-    target_class = LaunchConfiguration('target_class')
-    aruco_dictionary = LaunchConfiguration('aruco_dictionary')
-    aruco_marker_id = LaunchConfiguration('aruco_marker_id')
-    model_path = LaunchConfiguration('model_path')
-    confidence_threshold = LaunchConfiguration('confidence_threshold')
-    device = LaunchConfiguration('device')
-    use_sim_time = LaunchConfiguration('use_sim_time')
+        # ---- how closely to follow (issue 2) ----
+        DeclareLaunchArgument(
+            'standoff_distance', default_value='0.5',
+            description='Goal is placed this far behind the target. Lower = tighter. '
+                        'Must clear the target robot\'s inflated footprint in the '
+                        'follower costmap, else Nav2 rejects the goal: with '
+                        'inflation_radius 0.25 + robot_radius 0.1 the floor is ~0.45.'),
+        DeclareLaunchArgument(
+            'stop_distance', default_value='0.6',
+            description='Stop chasing once this close. Must be >= standoff_distance.'),
+        DeclareLaunchArgument(
+            'resume_distance', default_value='0.85',
+            description='Resume once the target pulls out to here. Must exceed '
+                        'stop_distance; the gap is anti-chatter hysteresis.'),
+        DeclareLaunchArgument('goal_update_period', default_value='0.75'),
+        DeclareLaunchArgument('goal_update_min_dist', default_value='0.25'),
 
-    vision_follow_node = Node(
+        # ---- lost-target recovery (issue 1) ----
+        DeclareLaunchArgument(
+            'target_lost_grace_sec', default_value='5.0',
+            description='Seconds without a detection before recovery starts.'),
+        DeclareLaunchArgument(
+            'recovery_timeout_sec', default_value='20.0',
+            description='How long to keep trying to re-acquire before giving up.'),
+        DeclareLaunchArgument(
+            'recovery_goal_backoff', default_value='0.35',
+            description="Stop this far short of the target's last position, so we "
+                        "never try to occupy a cell it may still be in."),
+        DeclareLaunchArgument(
+            'min_face_on_cosine', default_value='0.35',
+            description='Reject the target-heading estimate when the marker is more '
+                        'oblique than this (its normal, and so its yaw, is noise).'),
+
+        DeclareLaunchArgument('global_frame', default_value='map'),
+        DeclareLaunchArgument('robot_base_frame', default_value='base_link'),
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+    ]
+
+    lc = LaunchConfiguration
+    passthrough = [
+        'control_mode', 'detection_mode', 'aruco_marker_id', 'aruco_dictionary',
+        'marker_length', 'target_class', 'model_path', 'confidence_threshold',
+        'device', 'standoff_distance', 'stop_distance', 'resume_distance',
+        'goal_update_period', 'goal_update_min_dist', 'target_lost_grace_sec',
+        'recovery_timeout_sec', 'recovery_goal_backoff', 'min_face_on_cosine',
+        'global_frame', 'robot_base_frame', 'use_sim_time',
+    ]
+
+    node = Node(
         package='vision_follow',
         executable='vision_follow_node',
         name='vision_follow_node',
-        namespace=robot_name,
+        namespace=lc('robot_name'),
         output='screen',
-        parameters=[{
-            'detection_mode': detection_mode,
-            'target_class': target_class,
-            'aruco_dictionary': aruco_dictionary,
-            'aruco_marker_id': aruco_marker_id,
-            'model_path': model_path,
-            'confidence_threshold': confidence_threshold,
-            'device': device,
-            'use_sim_time': use_sim_time,
-        }],
+        # CRITICAL for nav2 mode: each robot's TF tree lives on /<ns>/tf. Without
+        # this remap the TransformListener reads the global /tf, never finds
+        # map->base_link, and silently never emits a goal. Mirrors what
+        # tb3_nav2.launch.py does for its RViz node.
+        remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')],
+        parameters=[{k: lc(k) for k in passthrough}],
     )
 
-    return LaunchDescription([
-        robot_name_arg,
-        detection_mode_arg,
-        target_class_arg,
-        aruco_dictionary_arg,
-        aruco_marker_id_arg,
-        model_path_arg,
-        confidence_arg,
-        device_arg,
-        use_sim_time_arg,
-        vision_follow_node,
-    ])
+    return LaunchDescription(args + [node])

@@ -1,0 +1,60 @@
+# GPU override — optional, but recommended for all parts.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+# WHAT IT CHANGES
+# ---------------
+# The base docker-compose.yml sets LIBGL_ALWAYS_SOFTWARE=1 on purpose, so the
+# simulation runs on ANY machine regardless of GPU or driver state -- at the
+# cost of speed (Gazebo renders on the CPU, and everything is visibly slower).
+#
+# This override:
+#   1. turns software rendering OFF, and
+#   2. actually hands the container the GPU.
+#
+# Both are needed. Setting the NVIDIA variables while LIBGL_ALWAYS_SOFTWARE=1 is
+# still in force does nothing at all -- Mesa's llvmpipe has already taken the GL
+# context before the NVIDIA driver is ever consulted. And exposing the env vars
+# without the `deploy`/`devices` blocks below means there is no GPU in the
+# container for them to point at.
+#
+# HOST PREREQUISITES (on your machine, not inside the container):
+#   1. an NVIDIA GPU with the proprietary driver installed (`nvidia-smi` works)
+#   2. the NVIDIA Container Toolkit installed, and the Docker daemon restarted:
+#        https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+#   3. `xhost +local:docker` run once per login (see README)
+#
+# NO NVIDIA GPU? Just omit this file. Everything still runs on the base compose
+# file, only slower.
+
+services:
+  ros:
+    environment:
+      # Undo the base file's CPU-rendering force. Without this line the two
+      # settings below are inert.
+      - LIBGL_ALWAYS_SOFTWARE=0
+
+      # NVIDIA PRIME render offload. On hybrid-graphics (Optimus) laptops the
+      # integrated GPU owns the display by default; these tell GLVND to route
+      # OpenGL to the NVIDIA card instead. Standard fix for the
+      # "libEGL ... failed to create dri2 screen" class of failure.
+      - __NV_PRIME_RENDER_OFFLOAD=1
+      - __GLX_VENDOR_LIBRARY_NAME=nvidia
+
+      # Expose the GPU. `graphics` and `display` are the capabilities that
+      # matter for an OpenGL window -- the default `compute,utility` set is
+      # enough for CUDA but NOT for rendering.
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
+
+    # Direct Rendering Infrastructure nodes, needed for hardware GL.
+    devices:
+      - /dev/dri:/dev/dri
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, graphics, display]

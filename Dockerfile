@@ -1,5 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Omokai image (core pipeline + multi-robot formations + vision follow).
+#   Parts 1, 2 and 4.  Part 3 (SLAM) lives in a separate repository -- see README.
 #
 # SPACE NOTE — this is designed to "extend" Part 1 without a second full copy:
 # the base + apt + pip layers below are BYTE-IDENTICAL to Part 1's Dockerfile.
@@ -12,8 +13,12 @@
 # layer down. The image is still fully standalone, so an examiner can build it
 # from a fresh clone.
 #
+# GPU: this image works both with and without GPU passthrough. See the README --
+# `docker compose up` gives you CPU rendering (runs anywhere); adding
+# `-f docker-compose.gpu.yml` gives you hardware-accelerated Gazebo.
+#
 # It does NOT auto-launch: it starts and stays alive; you open terminals into it
-# (docker compose exec ros bash) and run the Part 1 or Part 2 launches (see README).
+# (docker compose exec ros bash) and run the launch commands yourself (see README).
 # ─────────────────────────────────────────────────────────────────────────────
 FROM ros:jazzy-ros-base
 ENV DEBIAN_FRONTEND=noninteractive
@@ -41,13 +46,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Part 4 extra (new, small layer): camera bridge + vision deps ──
-# Placed AFTER the shared + Part 2 layers so it does not disturb the cached
-# layers above: anyone who already built Part 1/2 only rebuilds from here down.
-#   - ros-jazzy-ros-gz-image: the image_bridge used for the camera feed
-#   - python3-opencv: ArUco detection + solvePnP (the default vision mode)
-#   - ultralytics + numpy<2: optional YOLO mode. numpy is pinned <2 so it stays
-#     ABI-compatible with cv_bridge's compiled extension (a NumPy 2.x install
-#     otherwise breaks `import cv_bridge`).
+# Placed AFTER the shared + Part 2 layers so it doesn't disturb the layers
+# above: anyone who already built Part 1/2 on this machine only rebuilds from
+# here down.
+#   - ros-jazzy-ros-gz-image: the image_bridge that carries the camera feed
+#     from Gazebo into ROS (only spawned for the camera-equipped burger_cam
+#     model; see src/tb3_multi_robot/OMOKAI_CHANGES.md).
+#   - python3-opencv: ArUco marker detection + solvePnP pose estimation --
+#     this is the DEFAULT vision mode and needs nothing else.
+#   - ultralytics + numpy<2: the OPTIONAL 'yolo' detection mode only. numpy is
+#     pinned <2 because cv_bridge's compiled extension is built against NumPy
+#     1.x's ABI; installing NumPy 2.x makes `import cv_bridge` crash at
+#     runtime with an unrelated-looking ImportError.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-jazzy-ros-gz-image \
       python3-opencv \
@@ -56,17 +66,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip3 install --no-cache-dir --break-system-packages \
       "numpy<2" "ultralytics>=8.0"
 
-# ── Fix (discovered while building Part 4, but pre-existing since Part 1):
-# newer setuptools (this base image ships 68.x) changed how `setup.py
-# develop` honours colcon's requested script-install directory. Symptom:
-# `colcon build --symlink-install` succeeds with no error, but installs each
-# ament_python package's console_scripts entry point to install/<pkg>/bin/
-# instead of install/<pkg>/lib/<pkg>/ -- the directory `ros2 run`/`ros2
-# launch` actually look in -- so every Python node in the workspace becomes
-# unlaunchable while looking completely built. Confirmed community fix:
-# https://github.com/ros2/ros2_documentation/issues/4213 (68.2.2 -> 58.1.0).
-# Pinned here, as late as possible (right before the build that needs it),
-# so no later pip resolution can silently upgrade it back.
+# ── setuptools pin (found while building Part 4; the failure mode is general,
+# not Part-4-specific -- it would hit Part 1/2 too the next time any pip layer
+# nudges setuptools into the broken range). Some setuptools versions change how
+# `setup.py develop` honours colcon's requested script-install directory:
+# `colcon build --symlink-install` then SUCCEEDS with no error, but installs
+# every ament_python package's console_scripts entry point to
+# install/<pkg>/bin/ instead of install/<pkg>/lib/<pkg>/ -- the directory
+# `ros2 run`/`ros2 launch` actually look in. Symptom if this regresses: "package
+# 'X' found... but libexec directory '.../lib/X' does not exist". Confirmed
+# working version pinned here, deliberately as the LAST pip install before the
+# build that needs it, so no later dependency resolution can silently move it.
+# Ref: https://github.com/ros2/ros2_documentation/issues/4213
 RUN pip3 install --no-cache-dir --break-system-packages "setuptools==75.6.0"
 
 WORKDIR /ws

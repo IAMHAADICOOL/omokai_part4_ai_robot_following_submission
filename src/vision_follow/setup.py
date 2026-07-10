@@ -12,17 +12,15 @@ setup(
         ('share/ament_index/resource_index/packages', [f'resource/{package_name}']),
         (f'share/{package_name}', ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'params'), glob('params/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Omokai',
     maintainer_email='you@example.com',
-    description=(
-        'Part 4: ArUco/YOLO target detection, operator snapshot alert, and a '
-        'visual-servo follow controller for a TurtleBot3 camera in Gazebo.'
-    ),
+    description='Part 4: vision target detect, operator alert, and Nav2-based follow.',
     license='Apache-2.0',
-    # tests_require=['pytest'],
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'vision_follow_node = vision_follow.vision_follow_node:main',

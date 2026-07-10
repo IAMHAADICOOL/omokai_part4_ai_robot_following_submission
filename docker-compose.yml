@@ -1,13 +1,22 @@
-# Starts BOTH containers but does NOT launch the robot software automatically.
-# The ros container stays alive; you open terminals into it and run the Part 1
-# or Part 2 launch commands yourself (see README section "Launching").
-#   docker compose up -d --build      # build + start in the background
-#   docker compose exec ros bash      # open a terminal inside (repeat for more)
+# Starts BOTH containers but does NOT launch any robot software automatically.
+# The `ros` container just stays alive; you open terminals into it and run the
+# launch commands yourself (see the README's "Running" sections).
+#
+#   CPU rendering (works on any machine, no GPU needed):
+#     docker compose up -d --build
+#
+#   GPU rendering (hardware-accelerated Gazebo -- recommended):
+#     docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+#   Then, in each new terminal you want:
+#     docker compose exec ros bash
 services:
 
   ollama:
     image: ollama/ollama:latest
     volumes:
+      # Named volume: the ~2 GB language model persists across `ros` rebuilds,
+      # so you only download it once.
       - ollama_models:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -17,18 +26,26 @@ services:
 
   ros:
     build: .
+    # Gazebo + Nav2 + RViz share memory heavily; the 64 MB default /dev/shm
+    # causes intermittent crashes under multi-robot loads.
+    shm_size: 6gb
     depends_on:
       ollama:
         condition: service_healthy
     environment:
+      # Forward the host's X display so GUI windows (Gazebo, RViz, rqt) appear.
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
+      # CPU rendering by default: guarantees the sim runs on ANY machine,
+      # regardless of GPU or driver state. docker-compose.gpu.yml overrides this.
       - LIBGL_ALWAYS_SOFTWARE=1
       - TURTLEBOT3_MODEL=burger
       - LLM_MODEL=qwen2.5:3b
       - OLLAMA_HOST=http://ollama:11434
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Live-mount the source: edit code on the host, rebuild inside the
+      # container with `colcon build`, no image rebuild needed.
       - ./src:/ws/src
     stdin_open: true
     tty: true

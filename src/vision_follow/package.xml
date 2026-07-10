@@ -5,12 +5,11 @@
   <name>vision_follow</name>
   <version>1.0.0</version>
   <description>
-    Part 4 (vision AI target detect + follow). One robot watches its camera,
-    recognises a user-chosen target (an ArUco marker on another robot, or a
-    YOLO/COCO object), sends the operator a snapshot the moment it sees it, and
-    then follows it — turning to keep it centred and driving to hold a set
-    distance. Standalone: no LLM and no Nav2 in the loop; it publishes velocity
-    commands straight to the robot.
+    Part 4 (vision): one robot sees a target (ArUco marker on another robot, or
+    a YOLO class), sends the operator a snapshot, and follows it. In 'nav2'
+    control mode each detection becomes a map-frame goal a fixed standoff short
+    of the target, sent to Nav2, so the follower plans around obstacles instead
+    of driving blindly at the target.
   </description>
 
   <maintainer email="you@example.com">Omokai</maintainer>
@@ -22,15 +21,18 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
 
+  <!-- nav2 control mode: map-frame goals via TF + the NavigateToPose action -->
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+
   <!--
-    ArUco mode (the default, used for the robot-follows-robot demo) needs only
-    OpenCV, which is covered by python3-opencv above.
-    YOLO mode additionally needs Ultralytics, which is NOT resolvable by rosdep;
-    it is installed with pip (see the repo README and DEPENDENCIES.md), pinned
-    alongside numpy<2 to stay ABI-compatible with cv_bridge.
+    YOLO mode only: ultralytics is pip-only (not rosdep-resolvable) and must be
+    installed with numpy<2 to stay ABI-compatible with cv_bridge.
+    The default aruco mode needs nothing beyond python3-opencv.
   -->
 
   <export>

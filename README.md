@@ -1,4 +1,4 @@
-# Omokai — Core Task + Multi-Robot Formations + Vision Follow (Part 1 + Part 2 + Part 4)
+# Omokai — Core Task + Multi-Robot Formations + Vision Follow (Parts 1, 2, 4)
 ### Type an instruction in plain English → robot(s) drive themselves in a simulator
 
 **Part 1 (core):** you type something like *"patrol the perimeter twice."* A local
@@ -17,402 +17,406 @@ Part 2:  your words → AI planner → draft plan → safety checker → approve
                       (suggests)   (JSON)       (guardrail)                      (per-robot paths)
 ```
 
-Parts 1 and 2 share the core packages; Part 2 adds the formation coordinator and
-the multi-robot simulation on top.
-
----
-
-**Part 4 (vision AI — see a target, alert the operator, follow it):** a separate,
-self-contained track. One robot watches its **camera**, recognises a target you
-choose (by default an **ArUco marker** worn by another robot), **sends the
-operator a snapshot** the moment it spots it, and then **follows** it — turning to
-keep it centred and driving to hold a set distance.
+**Part 4 (vision AI — see a target, alert the operator, follow it):** no typing.
+One robot's camera recognises a target — by default an **ArUco marker** worn by
+another robot — **sends the operator a snapshot** the instant it spots it, then
+**follows it using Nav2**, planning around obstacles rather than driving straight
+at it.
 
 ```
-Part 4:  robot's camera → detector (ArUco/YOLO) → snapshot to operator + follow the target
-                          (recognise)             (alert)                (drive after it)
+Part 4:  camera → detect marker → snapshot to operator → map-frame goal → Nav2 drives around obstacles
+                  (ArUco+solvePnP)  (alert)              (standoff dist)   (plans + avoids)
 ```
 
-Part 4 is deliberately **standalone**: it has **no AI planner and no Nav2** in the
-loop. It reads camera frames and drives the robot directly. That's why it has its
-own run instructions (**Section "Running Part 4"** below) rather than using the
-`prompt → planner → validator` pipeline of Parts 1 and 2. It reuses the same
-multi-robot simulation, with a camera-equipped robot variant (`burger_cam`).
+> ### Part 3 (SLAM) lives in a separate repository
+> Part 3 builds a **line-feature Graph SLAM** system: the robot drives an unknown
+> circuit, turns LiDAR points into straight wall segments, and uses them to
+> correct its own drifting odometry — mapping and localizing at the same time.
+>
+> It is split out because it uses a **different simulator** (Stonefish, not
+> Gazebo) and a **different solver** (GTSAM), neither of which the other three
+> parts need. Keeping them apart means you don't have to install a marine-robotics
+> physics engine just to run the LLM pipeline.
+>
+> **→ [Part 3: Graph SLAM with line features](https://github.com/IAMHAADICOOL/omokai_part3_slam)**
 
-This repository **extends Part 1 → Part 2 → Part 4**, additively: each part is
-added on top without changing what already works.
 
 Each stage is a separate ROS 2 package. **Every package has its own README.md**
-inside its folder (open the folder on GitHub to read it) that explains that piece
-in detail — what it does, what it reads, and what it produces. Start here for
-setup; go into a package's README to understand that piece.
+inside its folder that explains that piece in detail — what it does, what it
+reads, what it produces. Start here for setup; go into a package's README to
+understand that piece.
 
 ---
 
-## Getting the code
-
-Clone the repository and move into its folder. **Every command in this guide is
-run from the repository's root folder** (the one containing `docker-compose.yml`,
-`Dockerfile`, and the `src/` folder) unless it says otherwise.
+## 0. Getting the code
 
 ```bash
-git clone https://github.com/IAMHAADICOOL/omokai_part4_ai_robot_following_submission.git omokai
-cd omokai
+git clone https://github.com/IAMHAADICOOL/omokai_part4_ai_robot_following_submission.git omokai_2_3_4
+cd omokai_2_3_4
 ```
 
-Check you're in the right place:
-```bash
-ls
-# you should see: Dockerfile  docker-compose.yml  install_native.sh  src  docs  README.md ...
-```
-Stay in this folder for everything below. The only time you go elsewhere is
-*inside* the Docker box (Section 5).
+**Every command in this guide is run from the repository root**, unless it says
+otherwise. If a command fails with "no such file," check you're in the folder
+that contains `docker-compose.yml`.
 
 ---
 
-## 0. One-time: add your saved map (for Part 1)
+## 1. Run with Docker (recommended)
 
-Part 1's demo drives around a **saved map** of the world. From the repo root, put
-your two map files at these paths before you build:
-```
-src/omokai_bringup/maps/turtlebot3_world.yaml
-src/omokai_bringup/maps/turtlebot3_world.pgm
-```
-Don't have a map yet? Make one — see **Section 4**. (Part 2 uses the multi-robot
-package's own map, so this step is only needed for Part 1.)
+**Supported:** Linux, x86_64. Tested there.
+**Untested:** ARM64 (Apple Silicon, Raspberry Pi).
+**Not supported:** macOS and Windows — the GUI relies on X11 forwarding through
+`/tmp/.X11-unix`, which those platforms don't provide natively.
 
----
+### 1a. Decide: GPU or no GPU?
 
-## 1. Run it with Docker (easiest — recommended)
+This is the one choice you need to make up front, and it changes only *which
+command you type* — not the code, not the image contents.
 
-You don't need to know Docker. Think of Docker as a **pre-built, sealed
-computer-in-a-box**: everything (ROS 2, the simulator, all the software) is
-already installed inside. We start **two boxes**: one runs the AI, the other runs
-the robot software. (Why two? See Section 6.)
+| | Without GPU | With GPU (recommended) |
+|---|---|---|
+| Command | `docker compose up -d --build` | `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build` |
+| Renders on | the CPU (Mesa llvmpipe) | your NVIDIA card |
+| Works on | **any machine** | machines with an NVIDIA GPU + Container Toolkit |
+| Speed | slow — Gazebo, Nav2 and the robots all visibly lag | full speed |
+| Setup needed | none | see 1b below |
 
-> **⚠️ Performance note:** this Docker setup renders the simulator (Gazebo) using
-> the **CPU**, not the GPU (`LIBGL_ALWAYS_SOFTWARE=1` — see Section "Supported
-> platform" below for why). This makes it work on any machine regardless of GPU,
-> but it also means everything — the simulation, the robots' motion, the
-> formations — **can look and feel noticeably slow**, especially with two
-> full Nav2 stacks and the AI running at the same time. This is expected; it is
-> not a bug in the pipeline. **If you want fast, full-speed execution, use the
-> native installation instead (Section 2)** — it runs directly on your machine's
-> real GPU/CPU with no container overhead.
+The two compose files stack: the base one is always used, and adding
+`-f docker-compose.gpu.yml` **layers changes on top of it**. That's what the
+repeated `-f` flags mean — Docker Compose merges them left to right, so the GPU
+file only has to state what differs (turn software rendering off, expose the
+GPU) rather than duplicate the whole service.
 
-**Important difference from a "one command and it runs" setup:** here, starting
-the boxes does **not** auto-launch anything. The robot box starts and *stays
-ready*; you then open terminals into it and run the Part 1 or Part 2 launch
-commands yourself. This is so you can choose which part to run, and so Part 2 can
-use several terminals. See **Section 1d (Launching)**.
+Everything below works either way. **All of Parts 1, 2 and 4 run with GPU
+support** — the GPU file is not Part-specific.
 
-### Supported platform
-Built and tested on **Linux (Ubuntu 24.04), x86_64 (amd64)**.
-- **Linux + x86_64** → fully supported (intended setup).
-- **Linux + ARM64** → images are multi-arch so it *may* build, but untested; expect slower CPU rendering.
-- **macOS / Windows** → **not supported for the GUI** (the windows rely on Linux's X11 display; macOS/Windows handle it differently). Use a Linux machine or a Linux VM with a display.
+### 1b. One-time GPU setup (skip if you're not using the GPU)
 
-### Disk space — this reuses Part 1's image layers
+You need three things on the **host machine**, not inside the container:
 
-If you already built the Part 1 image on this machine, building Part 2 costs very
-little extra disk. Docker builds images in **layers** and stores identical layers
-**once**. Part 2's base + system-packages + Python layers are written to be
-byte-identical to Part 1's, so Docker **reuses** Part 1's big ROS/Gazebo layer
-instead of rebuilding or re-storing it. The only new disk Part 2 adds is its small
-delta (a couple of extra tools, the multi-robot clone, and the compiled
-workspace). Nothing extra to do — just build Part 1 first (or in either order),
-and the shared layers are stored a single time. The image is still fully
-standalone, so building it from a fresh clone (e.g. on the examiner's machine)
-also works.
+1. **An NVIDIA GPU with the proprietary driver.** Verify:
+   ```bash
+   nvidia-smi
+   ```
+   If that prints a table of your GPU, you're good. If it says "command not
+   found," install the driver first.
 
-### 1a. Install Docker (only once, ever)
-```bash
-sudo apt install -y docker.io docker-compose-v2
-sudo usermod -aG docker $USER    # lets you run docker without sudo
-# now LOG OUT and back in (so the group change takes effect)
-```
-If apt complains about a `containerd.io` / `containerd` conflict, you already have
-a different Docker — use it, or remove the old one:
-```bash
-sudo apt remove -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo apt install -y docker.io docker-compose-v2
-```
+2. **The NVIDIA Container Toolkit** — this is what lets Docker hand a GPU to a
+   container at all. Follow NVIDIA's official guide:
 
-### 1b. Let the boxes open windows on your screen (once each time you log in)
+   **→ https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html**
+
+   After installing it, **restart the Docker daemon** (`sudo systemctl restart docker`),
+   otherwise Docker won't pick up the new runtime.
+
+3. Confirm Docker can actually see the GPU:
+   ```bash
+   docker run --rm --gpus all ubuntu nvidia-smi
+   ```
+   If this prints the same GPU table, passthrough works. If it errors, fix that
+   before going further — nothing downstream will work until it does.
+
+### 1c. Let the container draw on your screen
+
 ```bash
 xhost +local:docker
 ```
-This lets the container show the Gazebo / RViz / terminal windows on your desktop.
-Without it, the software runs but no windows appear.
 
-**Tip:** run this once per login. To avoid re-typing it, add it to your `~/.bashrc`:
+This grants the container permission to open windows on your X display. It
+**resets on every logout**. If Gazebo or RViz silently fails to appear, this is
+almost always why. To avoid retyping it:
 ```bash
 echo "xhost +local:docker >/dev/null 2>&1" >> ~/.bashrc
 ```
 
-### 1c. Build and start the boxes (does NOT launch the robot software)
+### 1d. Build and start
+
+**Without GPU:**
 ```bash
 docker compose up -d --build
 ```
-What this does:
-- **builds** the box from the recipe (`Dockerfile`) — installs ROS 2, Gazebo,
-  compiles everything (the multi-robot package is already included in src/)
-- **starts** the AI box and downloads the ~2 GB AI model (first time only)
-- **starts** the robot box and leaves it **running and idle**, ready for you
 
-The `-d` means "in the background." First run is slow (building + downloading);
-later runs are fast. Nothing will pop up yet — that's expected.
+**With GPU:**
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
 
-### 1d. Launching — open terminals into the box and run a part
+What the flags do:
+- `-f <file>` — which compose file(s) to use. Repeating it merges them in order.
+- `up` — create and start the containers.
+- `-d` — detached: run in the background and give you your terminal back.
+- `--build` — (re)build the image first if the Dockerfile or `src/` changed.
 
-Every launch happens **inside** the robot box. To open a terminal inside it:
+> **Disk space.** The heavy `apt` and `pip` layers in the Dockerfile are shared
+> across parts, so if you've built this image before, Docker reuses those layers
+> rather than re-downloading them. Only the small per-part deltas rebuild.
+
+This starts **two containers**: `ollama` (the local language model) and `ros`
+(everything else). Neither launches any robot software — the `ros` container just
+stays alive, waiting for you.
+
+### 1e. Open a terminal inside
+
+Every launch command below runs *inside* the container. Each time you need
+another terminal, open another one this way:
+
 ```bash
 docker compose exec ros bash
 ```
-Run that in a new terminal window each time you need another one (Part 2 needs
-three). Inside, ROS 2 and the project are already loaded.
 
-**► Part 1 — single robot (core pipeline).** One terminal:
+- `exec` — run a command in an already-running container.
+- `ros` — which service (the one from `docker-compose.yml`).
+- `bash` — what to run: an interactive shell.
+
+ROS is already sourced inside that shell (the Dockerfile appends the `source`
+lines to `/root/.bashrc`), so `ros2` just works.
+
+---
+
+## 2. Running Part 1 — core pipeline (1 terminal)
+
 ```bash
-docker compose exec ros bash
-# inside the box:
 ros2 launch omokai_bringup core_pipeline.launch.py
 ```
-Gazebo, RViz, and four small pipeline terminals appear. In the **"1 INTERFACE"**
-window type, e.g., `Patrol the perimeter loop twice`.
 
-**► Part 2 — multi-robot formations.** Three terminals into the box:
+Several `xterm` windows open, one per pipeline stage — **INTERFACE** (where you
+type), **LLM PLANNER** (shows the draft plan as JSON), **VALIDATOR** (accepted /
+rejected, with the reason), **EXECUTOR** (prints an `AUDIT` line and drives).
+
+Type into the **INTERFACE** window:
+```
+Patrol the perimeter twice
+```
+
+| You type | What happens |
+|---|---|
+| `Patrol the perimeter twice` | robot drives the perimeter route, twice |
+| `Drive to the inspection point` | single-waypoint navigation |
+| `Fly to 500 metres` | **rejected** by the validator — outside allowed bounds. This is the guardrail working, not a bug. |
+
+### 2a. Changing the perimeter route for your own map
+
+The perimeter loop is just a list of coordinates in
+`src/omokai_bringup/config/routes.yaml`. To get coordinates for a *different*
+map, read them straight out of RViz:
+
+**Step 1 — publish a point in RViz.**
+1. In RViz's top toolbar, click the **Publish Point** button.
+2. Click anywhere in the 3D view to select that point.
+
+**Step 2 — read it in a terminal.** Every time you click, RViz publishes a
+`geometry_msgs/PointStamped` message on the topic `/clicked_point`. In another
+terminal (inside the container):
+
 ```bash
-# Terminal A — the simulator (Gazebo world + the robots):
-docker compose exec ros bash
+ros2 topic echo /clicked_point
+```
+
+**Step 3 — click points in RViz and watch them appear.** Each click prints:
+
+```yaml
+header:
+  stamp:
+    sec: 1698745200
+    nanosec: 123456789
+  frame_id: "map"
+point:
+  x: 2.34
+  y: -1.05
+  z: 0.0
+```
+
+Take the `x` and `y` from each click and paste them into `routes.yaml` in the
+order you want the robot to visit them. The `z` is always `0.0` for a ground
+robot, and `frame_id: "map"` confirms the coordinates are in the map frame —
+which is exactly what the executor expects.
+
+> **If `ros2 topic echo` says "command not found"**, you haven't sourced ROS in
+> that terminal. Inside the container it's automatic; on a native install run
+> `source /opt/ros/jazzy/setup.bash` first.
+
+> Rebuild after editing (`colcon build --packages-select omokai_bringup`) or,
+> because `src/` is live-mounted and the build uses `--symlink-install`, just
+> relaunch — config files are picked up without a rebuild.
+
+---
+
+## 3. Running Part 2 — multi-robot formations (3 terminals)
+
+```bash
+# Terminal A — the simulator, both robots
 ros2 launch tb3_multi_robot tb3_world.launch.py
 
-# Terminal B — per-robot navigation (wait until both robots localize):
-docker compose exec ros bash
+# Terminal B — a full Nav2 stack for each robot
 ros2 launch tb3_multi_robot tb3_nav2.launch.py
 
-# Terminal C — the formation pipeline:
-docker compose exec ros bash
+# Terminal C — the prompt → planner → validator → coordinator pipeline
 ros2 launch omokai_bringup formation.launch.py
 ```
-Then in the **"1 INTERFACE"** window (from Terminal C) type, e.g.:
+
+Wait for Terminal B to settle (Nav2 seeds AMCL a few seconds in — until it does,
+you'll see `frame does not exist` warnings; that's normal startup noise, not a
+fault). Then type into the **INTERFACE** window from Terminal C:
+
 ```
 Sweep the area in a wedge
 ```
-Both robots drive off in formation. Try also `Move in a line formation` and
-`Drive in single file`.
 
-**► Part 4 — vision follow (one robot follows another).** This one is different:
-no typing, no AI planner. You start the simulator with the **camera robot**, start
-the vision node, watch the annotated camera view, and drive the *target* robot
-around by keyboard so the *follower* chases it. Four terminals into the box:
-
-```bash
-# Terminal A — simulator with the CAMERA robot variant (note the env var):
-docker compose exec ros bash
-export TURTLEBOT3_MODEL=burger_cam
-ros2 launch tb3_multi_robot tb3_world.launch.py
-
-# Terminal B — the vision follow node, attached to tb1 (the follower):
-docker compose exec ros bash
-ros2 launch vision_follow vision_follow.launch.py robot_name:=tb1 \
-    detection_mode:=aruco aruco_marker_id:=0
-
-# Terminal C — the annotated camera view (pick /tb1/vision/detection_image):
-docker compose exec ros bash
-ros2 run rqt_image_view rqt_image_view
-
-# Terminal D — drive the TARGET robot (tb3) by keyboard so tb1 follows it:
-docker compose exec ros bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard \
-    --ros-args -r cmd_vel:=/tb3/cmd_vel -p stamped:=true
-```
-
-In the `rqt_image_view` window choose **`/tb1/vision/detection_image`** (not
-`camera/image_raw`). You'll see the marker outlined, 3-D pose axes drawn on it,
-and a text overlay (target id, ids seen, LOCKED/SEARCHING, distance in metres, and
-the live drive command). Drive `tb3` around with Terminal D and `tb1` follows it;
-each time `tb1` first sees the marker it saves a snapshot to
-`/tmp/vision_follow_snapshots/` and prints an `[OPERATOR ALERT]` line in Terminal B.
-
-> **Why `burger_cam`?** Parts 1 and 2 use the plain `burger` robot (no camera).
-> Part 4 needs a camera and a marker, so it uses a `burger_cam` variant, selected
-> only by `export TURTLEBOT3_MODEL=burger_cam` before launching the simulator.
-> Set it in **every** terminal for Part 4, or set it once and reuse the same
-> terminals. The default remains `burger`, so Parts 1 and 2 are unaffected.
-
-> **⚠️ Performance note (Part 4):** in Docker, Gazebo renders on the **CPU**
-> (`LIBGL_ALWAYS_SOFTWARE=1`). Camera rendering plus detection is heavier than the
-> other parts, so the feed and the follow may lag. The default `aruco` mode is
-> light and runs fine on CPU. The optional `yolo` mode does CPU inference and will
-> be slow in Docker — **for smooth vision, use the native install (Section 2)**,
-> and for YOLO on a GPU pass `device:=cuda:0` (see the `vision_follow` README).
-
-### 1e. Stop everything
-```bash
-docker compose down
-```
-This shuts down and removes both boxes cleanly (and kills any stuck simulator).
-
-### The handful of Docker commands you'll actually use
-| Command | Plain-English meaning |
-|---|---|
-| `docker compose up -d --build` | build (if needed) and start the boxes, idle |
-| `docker compose up -d` | start the boxes (already built — faster) |
-| `docker compose exec ros bash` | **open a terminal inside** the robot box (run the launches here) |
-| `docker compose logs -f ros` | watch the robot box's messages |
-| `docker compose down` | stop and remove the boxes |
-
----
-
-## 2. Run it without Docker (native install)
-
-Clean **Ubuntu 24.04** machine. From the repo root:
-```bash
-bash install_native.sh    # installs ROS 2, Gazebo, TB3, Nav2, Ollama, then builds (tb3_multi_robot is already in src/)
-# open a NEW terminal (so settings load), then run a part:
-```
-**Part 1:**
-```bash
-ros2 launch omokai_bringup core_pipeline.launch.py
-```
-**Part 2 (three terminals):**
-```bash
-ros2 launch tb3_multi_robot tb3_world.launch.py     # T1: simulator
-ros2 launch tb3_multi_robot tb3_nav2.launch.py      # T2: per-robot Nav2
-ros2 launch omokai_bringup formation.launch.py      # T3: formation pipeline
-```
-
-**Part 4 — vision follow (four terminals):**
-```bash
-export TURTLEBOT3_MODEL=burger_cam                                              # in each terminal
-ros2 launch tb3_multi_robot tb3_world.launch.py                                 # T1: sim (camera robot)
-ros2 launch vision_follow vision_follow.launch.py robot_name:=tb1 \
-    detection_mode:=aruco aruco_marker_id:=0                                    # T2: follower's vision
-ros2 run rqt_image_view rqt_image_view                                         # T3: pick /tb1/vision/detection_image
-ros2 run teleop_twist_keyboard teleop_twist_keyboard \
-    --ros-args -r cmd_vel:=/tb3/cmd_vel -p stamped:=true                        # T4: drive target tb3
-```
-Native runs at full GPU speed, so the camera feed and follow are smooth (unlike
-the CPU-rendered Docker path). Exact versions are in `DEPENDENCIES.md`.
-
----
-
-## 3. What to type, and what should happen
-
-**Part 1 (single robot):**
-| You type | What happens |
-|---|---|
-| `Patrol the perimeter loop twice` | robot drives the perimeter route, 2 times |
-| `Speed 5 m/s around the loop` | **rejected** — too fast; the VALIDATOR window says why |
-
-**Part 2 (formations):**
 | You type | What happens |
 |---|---|
 | `Sweep the area in a wedge` | both robots drive in a wedge along the sweep route |
 | `Move in a line formation` | robots drive side-by-side |
 | `Drive in single file` | robots drive one behind the other (column) |
 
-The pipeline windows (left to right): **INTERFACE** (you type) → **LLM PLANNER**
-(draft plan as JSON) → **VALIDATOR** (accepted/rejected + reason) → **EXECUTOR**
-(Part 1) or **FORMATION COORDINATOR** (Part 2), which prints an `AUDIT` line and
-the per-robot goals.
+---
 
-**Part 4 (vision follow):** there's nothing to *type* — you drive the target robot
-and watch the follower react.
+## 4. Running Part 4 — vision follow (5 terminals)
+
+Here `tb1` is the **follower** (it has the camera) and `tb3` is the **target**
+(it wears the ArUco marker, and you drive it by hand).
+
+```bash
+# Terminal A — simulator, with the CAMERA robot variant
+export TURTLEBOT3_MODEL=burger_cam
+ros2 launch tb3_multi_robot tb3_world.launch.py
+
+# Terminal B — Nav2 for the FOLLOWER ONLY
+export TURTLEBOT3_MODEL=burger_cam
+ros2 launch vision_follow follow_nav2.launch.py robot_name:=tb1
+
+# Terminal C — the vision + follow logic
+export TURTLEBOT3_MODEL=burger_cam
+ros2 launch vision_follow vision_follow.launch.py robot_name:=tb1
+
+# Terminal D — the annotated camera view
+ros2 run rqt_image_view rqt_image_view
+#   then pick  /tb1/vision/detection_image  from the dropdown
+#   (NOT camera/image_raw -- that's the raw, undecorated feed)
+
+# Terminal E — drive the TARGET robot by keyboard
+ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+    --ros-args -r cmd_vel:=/tb3/cmd_vel -p stamped:=true
+```
+
+What the arguments mean:
+- `export TURTLEBOT3_MODEL=burger_cam` — selects the camera+marker robot variant.
+  Parts 1 and 2 use the plain `burger`; this leaves them untouched. **Set it in
+  every Part 4 terminal that launches something.**
+- `robot_name:=tb1` — which robot to attach Nav2 / the vision node to.
+- `-r cmd_vel:=/tb3/cmd_vel` — *remaps* teleop's output topic so it drives `tb3`
+  (the target) rather than the default `/cmd_vel`.
+- `-p stamped:=true` — publish `TwistStamped` instead of `Twist`; the Gazebo
+  bridge in this project expects the stamped form.
+
+> **Wait for Terminal B before starting C.** Nav2 can't plan until AMCL is
+> localized, which requires a `map` frame to exist. `follow_nav2.launch.py` seeds
+> AMCL automatically ~10 s after startup and **logs a line when it does**
+> (`[follow_nav2] seeding tb1 AMCL...`). Until then, Terminal B repeats
+> `Timed out waiting for transform ... frame does not exist`. That's expected —
+> give it time rather than restarting.
+
+> **Why a separate Nav2 launch?** `tb3_nav2.launch.py` (from Part 2) starts Nav2
+> for *every* enabled robot. Here that's wasteful — the target is driven by
+> teleop and plans nothing — and actively harmful, because the target's
+> `collision_monitor` would publish to its own `cmd_vel` and fight your teleop.
+> `follow_nav2.launch.py` starts one stack, for the follower, with parameters
+> tuned to let it follow more closely. Details in `src/vision_follow/README.md`.
+
+**Nothing to type — you drive and watch:**
+
 | You do | What happens |
 |---|---|
-| Drive `tb3` around (Terminal D) | `tb1` turns to keep the marker centred and follows, holding ~0.6 m |
-| `tb1` first sees the marker | a snapshot is saved to `/tmp/vision_follow_snapshots/` and an `[OPERATOR ALERT]` line prints |
-| Drive `tb3` out of view | `tb1` rotates toward where the marker was last seen (last-pose recovery), then stops if it can't re-find it |
+| Drive `tb3` around (Terminal E) | `tb1` turns to keep the marker centred, follows it, planning around obstacles, holding ~0.5–0.6 m |
+| `tb1` first sees the marker | a snapshot is saved to `/tmp/vision_follow_snapshots/`, and Terminal C prints an `[OPERATOR ALERT]` line |
+| Drive `tb3` sharply out of view | `tb1` drives to where it was last seen, **facing the direction it was heading**, then stops if it still can't re-find it |
 | `ros2 topic pub --once /tb1/vision/set_target_class std_msgs/msg/String "{data: '3'}"` | switches the followed marker id at runtime, no restart |
 
-The annotated view on `/tb1/vision/detection_image` shows the marker outline, its
-pose axes, and a live text overlay (target, ids seen, lock state, distance,
-command).
-
 ---
 
-## 4. Make your own map (Part 1, mapping mode)
+## 5. Stop everything
+
 ```bash
-ros2 launch omokai_bringup core_pipeline.launch.py slam:=True
-ros2 run turtlebot3_teleop teleop_keyboard    # drive around to build the map
-ros2 run nav2_map_server map_saver_cli -f src/omokai_bringup/maps/turtlebot3_world
-```
-Then rebuild: `colcon build --symlink-install`. Write `slam:=True`/`slam:=False`
-with a **capital** letter — Nav2 reads it as Python.
+# without GPU
+docker compose down
 
-Where the (single) robot starts is set once in
-`src/omokai_bringup/config/spawn_pose.yaml` — it feeds both the simulator and the
-localizer so they always agree (no manual "2D Pose Estimate"). For the multi-robot
-part, the equivalent single source of truth is `tb3_multi_robot`'s
-`config/robots.yaml` (name + spawn pose + enabled flag per robot).
+# with GPU (same files you started with)
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml down
+```
+
+`down` stops and removes the containers. Your named volume `ollama_models` is
+kept, so the language model isn't re-downloaded next time.
 
 ---
 
-## 5. Working inside the Docker box
+## 6. Run natively (no Docker)
 
-### Open another terminal inside the running robot box
 ```bash
-docker compose exec ros bash
+bash install_native.sh
 ```
-You're now inside the box; ROS 2 and the project are loaded. Type `exit` to leave
-(the box keeps running). This is how you open the multiple terminals Part 2 needs.
 
-### Add a new ROS package to the box
-1. Put your package under `src/` on your computer: `src/my_new_package/`
-2. With the default Docker setup, your local `src/` is bind-mounted into the
-  container at `/ws/src`, so code edits appear immediately in the running box.
-  For changes that affect installed entry points or launch/data files, rebuild
-  the workspace once inside the container:
-  ```bash
-  docker compose exec ros bash
-  cd /ws && colcon build --symlink-install && source install/setup.bash
-  ```
-3. If you add or remove packages, or change dependencies, rebuild the image
-  once so the container picks up the new package set:
-  ```bash
-  docker compose up -d --build
-  ```
+Then open a **new** terminal (the script appends `source` lines to `~/.bashrc`)
+and use the exact same launch commands from Sections 2, 3 and 4 — minus the
+`docker compose exec ros bash` step.
+
+Natively the GPU is used directly, so no override is needed. On a
+hybrid-graphics laptop, prefix a launch with
+`__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia` to force it onto
+the NVIDIA card.
+
+Exact package versions are in `DEPENDENCIES.md`.
 
 ---
 
-## 6. Why two separate boxes (ROS box + Ollama box)?
-- **Each box does one job.** The AI box is a ready-made Ollama image; the robot
-  box only needs ROS/Gazebo. Mixing them makes a bigger, more fragile image.
-- **The model is downloaded once and kept**, in the AI box's own storage (a Docker
-  volume), so rebuilding the robot box doesn't wipe or re-download it.
-- **They restart independently.**
-- **It mirrors reality** — on a real robot the LLM often runs as its own service.
+## 7. Working inside the Docker box
 
-They talk over a private network Docker sets up: the robot box reaches the AI at
-`http://ollama:11434` (the `OLLAMA_HOST` variable in `docker-compose.yml`).
+**Another terminal:** `docker compose exec ros bash`
+
+**After editing code:** `src/` is live-mounted, so your host edits are already
+inside the container. Rebuild there:
+```bash
+cd /ws && colcon build --symlink-install && source install/setup.bash
+```
+No image rebuild needed. You only need `--build` again if you change the
+`Dockerfile` itself.
+
+**Adding a package:** create it under `src/` on the host, then `colcon build`
+inside the container as above.
 
 ---
 
-## 7. How the pieces fit together (architecture)
+## 8. Why two separate containers
 
-Each item is a ROS 2 package with its **own detailed README.md** inside its folder.
+`ollama` runs the language model; `ros` runs everything else. Keeping them apart
+means each does one job, the downloaded model persists in a named volume across
+`ros` image rebuilds, and it mirrors how a real robot would run its LLM as its
+own service rather than bolted into the control stack.
 
-**Shared core (Part 1):**
-- **mission_schemas** — the shared "contract": the exact shape a valid plan must have.
-- **mission_interface** — puts the sentence you type on `/mission/prompt`.
-- **mission_llm_planner** — asks the local AI to turn the sentence into a draft plan. It only *suggests*.
-- **mission_validator** — the guardrail: re-checks the draft against the contract **and** safety rules. Good → `/mission/validated`, bad → `/mission/rejected`.
-- **mission_executor** — Part 1's driver: reads approved plans, drives one robot via Nav2, logs a `sha256` fingerprint of each plan.
-- **omokai_bringup** — the "start everything" package: launch files (`core_pipeline.launch.py` for Part 1, `formation.launch.py` for Part 2), the map, routes, robot settings, spawn config.
+---
+
+## 9. How the pieces fit together (architecture)
+
+**Shared core (Parts 1 & 2):**
+- **mission_schemas** — the Pydantic `Mission` model. The one contract every other package agrees on.
+- **mission_interface** — you type; it publishes to `/mission/prompt`.
+- **mission_llm_planner** — asks the local LLM, emits a draft plan on `/mission/candidate`.
+- **mission_validator** — schema + safety rules. Publishes `/mission/validated` or `/mission/rejected`.
+
+**Single robot (Part 1):**
+- **mission_executor** — drives one robot via Nav2's `FollowWaypoints`, with a sha256 audit log.
 
 **Multi-robot (Part 2):**
-- **formation_coordinator** — the squad driver: turns one `formation_sweep` plan into a separate offset path per robot (line/column/wedge) and drives each robot's `/<name>/follow_waypoints`.
-- **tb3_multi_robot** *(vendored fork, included in `src/`)* — spawns multiple namespaced TurtleBot3s in one Gazebo world, each with its own Nav2 stack. It's our fork of [github.com/arshadlab/tb3_multi_robot](https://github.com/arshadlab/tb3_multi_robot) (Apache 2.0); the changes we made are documented in `src/tb3_multi_robot/OMOKAI_CHANGES.md`, and the upstream docs are kept in `src/tb3_multi_robot/UPSTREAM_README.md`. For Part 4 it also provides the **`burger_cam`** model variant (camera + ArUco marker); see its `OMOKAI_CHANGES.md`.
+- **formation_coordinator** — turns one squad plan into a per-robot offset path (line/column/wedge) and drives each robot's `/<name>/follow_waypoints`.
+- **tb3_multi_robot** *(vendored fork)* — spawns N namespaced TurtleBot3s in one Gazebo world, each with its own Nav2 stack. Our fork of [arshadlab/tb3_multi_robot](https://github.com/arshadlab/tb3_multi_robot) (Apache 2.0); our changes are in `src/tb3_multi_robot/OMOKAI_CHANGES.md`, upstream docs in `UPSTREAM_README.md`. It also provides the **`burger_cam`** variant (camera + ArUco marker) that Part 4 needs.
 
 **Vision follow (Part 4):**
-- **vision_follow** *(standalone)* — one robot's camera → recognise a target (ArUco marker by default, or a YOLO/COCO object) → send the operator a snapshot on first sight → follow it with a visual-servo controller (turn to centre, drive to hold distance), using `solvePnP` for metric distance and last-pose recovery when the target leaves view. No AI planner and no Nav2: it publishes `cmd_vel` directly. Full detail in `src/vision_follow/README.md`.
+- **vision_follow** — camera → ArUco (or YOLO) detection → operator snapshot on first sighting → follow. In `nav2` mode (default) each detection becomes a map-frame goal a fixed standoff short of the target, sent to `NavigateToPose`, so the follower routes around obstacles. Includes a heading-aware recovery state machine for when the target leaves view. Full detail in `src/vision_follow/README.md`.
+
+**SLAM (Part 3):** separate repository — see the link at the top.
 
 This is why the design is safe and gradeable: for Parts 1 and 2 the AI is kept
 **out of the control loop**, every plan is **schema-checked**, and the drivers are
-**predictable and logged**; Part 4 keeps the same spirit — the detector only
-*reports*, and a fixed, auditable control law does the driving (with a hard
-non-finite-command guard before the wheels).
+**predictable and logged**. Part 4 keeps the same spirit — the vision node only
+*reports* what it sees, and a fixed, auditable control law (with a hard
+non-finite-command guard before the wheels) decides what to do about it.
 
 Sources and licenses: `docs/SOURCES.md`.
