@@ -83,7 +83,7 @@ class FormationCoordinator(Node):
             self.get_logger().error("no center path resolved")
             return
         ftype = mission.formation.type.value if mission.formation else "line"
-        spacing = mission.formation.spacing_m if mission.formation else 0.5
+        spacing = mission.formation.spacing_m if mission.formation else 0.2
         loops = max(1, mission.loops)
         audit = hashlib.sha256(msg.data.encode()).hexdigest()[:12]
         n = len(self.ns_list)

@@ -34,6 +34,9 @@ COMMAND TYPES:
 
 2. waypoint_nav  (single robot)
    Fields: command_type="waypoint_nav", waypoints=[...]
+   Example prompt: "Go to x=1.0 y=1.0, then x=2.0 y=0.5"
+   -> command_type="waypoint_nav",
+      waypoints=[{"x":1.0,"y":1.0,"yaw":0.0},{"x":2.0,"y":0.5,"yaw":0.0}]
 
 3. formation_sweep  (multi-robot squad)
    Fields: command_type="formation_sweep", route_name="sweep",
@@ -45,15 +48,15 @@ COMMAND TYPES:
    Example prompts and correct output:
    "Sweep the area in a wedge"
    -> command_type="formation_sweep", route_name="sweep",
-      formation={"type":"wedge","spacing_m":0.5}, loops=1
+      formation={"type":"wedge","spacing_m":0.2}, loops=1
 
    "Move in a line formation"
    -> command_type="formation_sweep", route_name="sweep",
-      formation={"type":"line","spacing_m":0.5}, loops=1
+      formation={"type":"line","spacing_m":0.2}, loops=1
 
    "Drive in single file"
    -> command_type="formation_sweep", route_name="sweep",
-      formation={"type":"column","spacing_m":0.5}, loops=1
+      formation={"type":"column","spacing_m":0.2}, loops=1
 
 RULES:
 - max_linear_speed <= 0.22, max_angular_speed <= 2.84

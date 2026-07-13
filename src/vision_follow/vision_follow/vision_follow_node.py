@@ -97,7 +97,7 @@ class VisionFollowNode(Node):
         # ---- Detection --------------------------------------------------
         self.declare_parameter('detection_mode', 'aruco')
         self.declare_parameter('control_mode', 'nav2')
-        self.declare_parameter('target_class', 'person')
+        self.declare_parameter('target_class', 'robot')
         self.declare_parameter('confidence_threshold', 0.5)
         self.declare_parameter('model_path', 'yolov8n.pt')
         self.declare_parameter('device', 'cpu')
@@ -289,6 +289,7 @@ class VisionFollowNode(Node):
 
     def _init_aruco(self):
         dict_id = getattr(cv2.aruco, self.aruco_dictionary_name)
+        # the following is due to version mismatch between OpenCV 4.7 and 4.8: the ArUcoDetector class is new in 4.8
         if hasattr(cv2.aruco, 'ArucoDetector'):
             self._aruco_new_api = True
             self._aruco_detector = cv2.aruco.ArucoDetector(

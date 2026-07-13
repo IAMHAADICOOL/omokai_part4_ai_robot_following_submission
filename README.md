@@ -51,8 +51,8 @@ understand that piece.
 ## 0. Getting the code
 
 ```bash
-git clone https://github.com/IAMHAADICOOL/omokai_part4_ai_robot_following_submission.git omokai_2_3_4
-cd omokai_2_3_4
+git clone https://github.com/IAMHAADICOOL/omokai_part4_ai_robot_following_submission.git omokai_1_2_4
+cd omokai_1_2_4
 ```
 
 **Every command in this guide is run from the repository root**, unless it says
@@ -209,7 +209,7 @@ map, read them straight out of RViz:
 terminal (inside the container):
 
 ```bash
-ros2 topic echo /clicked_point
+ros2 topic echo /tb1/clicked_point
 ```
 
 **Step 3 — click points in RViz and watch them appear.** Each click prints:
